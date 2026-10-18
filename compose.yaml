@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: deadline_demon
+      POSTGRES_USER: deadline_demon
+      # Local development only. This credential is intentionally not a secret.
+      POSTGRES_PASSWORD: deadline_demon_local_only
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - deadline_demon_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deadline_demon -d deadline_demon"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  deadline_demon_postgres:
