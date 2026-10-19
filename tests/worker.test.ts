@@ -116,4 +116,39 @@ describe.skipIf(!databaseUrl)('worker retries after a paused delivery', () => {
   expect(send.mock.calls[0]?.[1]).toContain('GitHub reports PR open; no merge verified');
   expect((await pool!.query('SELECT status FROM scheduled_jobs WHERE contract_id=$1', [linked.id])).rows).toEqual([{ status: 'done' }]);
  });
+
+ it('discards reclaimed jobs and every queued snapshot for a deleted task without changing another task or its timing', async () => {
+  const user = (await pool!.query<{ id: string }>(`INSERT INTO users(imessage_handle,timezone,space_id,paused,hourly_summary_due_at)
+   VALUES('deleted@example.test','Asia/Kolkata','test-space',true,now()+interval '1 hour') RETURNING id`)).rows[0]!;
+  const deleted = (await pool!.query<{ id: string }>(`INSERT INTO contracts(user_id,title,artifact_type,repo_owner,repo_name,artifact_number,artifact_url,due_at,intensity,state,confirmed_at,deleted_at)
+   VALUES($1,'Deleted GitHub task','pull_request','owner','repo',42,'https://github.com/owner/repo/pull/42',now()+interval '10 minutes','mild','active',now()-interval '3 hours',now()) RETURNING id`, [user.id])).rows[0]!;
+  const other = (await pool!.query<{ id: string }>(`INSERT INTO contracts(user_id,title,artifact_type,due_at,intensity,state,confirmed_at,progress_percent)
+   VALUES($1,'Keep this task','task',now()+interval '3 hours','savage','active',now()-interval '1 hour',44) RETURNING id`, [user.id])).rows[0]!;
+  await pool!.query('UPDATE users SET selected_contract_id=$2 WHERE id=$1', [user.id, other.id]);
+  await pool!.query(`INSERT INTO scheduled_jobs(contract_id,job_type,run_at)
+   VALUES($1,'before_120',now()+interval '1 hour')`, [other.id]);
+  for (const [index, type] of ['monitor', 'before_15', 'deadline', 'followup'].entries()) {
+   await pool!.query(`INSERT INTO scheduled_jobs(contract_id,job_type,run_at,status,attempts,locked_until)
+    VALUES($1,$2,now()-interval '1 minute',$3,4,now()-interval '1 minute')`, [deleted.id, type, index % 2 ? 'processing' : 'pending']);
+  }
+  for (const [index, kind] of ['reply', 'reminder', 'verdict', 'victory', 'error', 'summary'].entries()) {
+   await pool!.query(`INSERT INTO outbox(user_id,contract_id,contract_version,space_id,event_key,message_text,kind,status,attempts,locked_until)
+    VALUES($1,$2,NULL,'test-space',$3,'Stale deleted task snapshot',$4,$5,4,now()-interval '1 minute')`,
+    [user.id, deleted.id, `deleted:${kind}`, kind, index % 2 ? 'processing' : 'pending']);
+  }
+  const taskBefore = (await pool!.query('SELECT * FROM contracts WHERE id=$1', [other.id])).rows;
+  const jobsBefore = (await pool!.query('SELECT * FROM scheduled_jobs WHERE contract_id=$1', [other.id])).rows;
+  const ownerBefore = (await pool!.query('SELECT paused,selected_contract_id,hourly_summary_due_at FROM users WHERE id=$1', [user.id])).rows;
+  const forbidden = vi.fn(async () => { throw new Error('Deleted task must not call integrations'); });
+  const worker = new Worker(pool!, {} as Orchestrator, { inspect: forbidden } as GitHubReader,
+   { parse: forbidden, generate: forbidden } as Agent, { send: forbidden, responding: forbidden, stop: forbidden } as Transport,
+   { error: vi.fn() } as unknown as Logger);
+  for (let i = 0; i < 6; i++) await worker.tick();
+  expect(forbidden).not.toHaveBeenCalled();
+  expect((await pool!.query('SELECT status FROM scheduled_jobs WHERE contract_id=$1', [deleted.id])).rows).toEqual(Array(4).fill({ status: 'done' }));
+  expect((await pool!.query('SELECT status FROM outbox WHERE contract_id=$1', [deleted.id])).rows).toEqual(Array(6).fill({ status: 'suppressed' }));
+  expect((await pool!.query('SELECT * FROM contracts WHERE id=$1', [other.id])).rows).toEqual(taskBefore);
+  expect((await pool!.query('SELECT * FROM scheduled_jobs WHERE contract_id=$1', [other.id])).rows).toEqual(jobsBefore);
+  expect((await pool!.query('SELECT paused,selected_contract_id,hourly_summary_due_at FROM users WHERE id=$1', [user.id])).rows).toEqual(ownerBefore);
+ });
 });

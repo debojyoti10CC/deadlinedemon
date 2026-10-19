@@ -1,14 +1,14 @@
 import type { PoolClient } from 'pg';
 import type { Agent, Contract, GitHubReader, Intent, User } from '../types.js';
 import { contractByReference, contractsFor, historyFor, queueMessage, recordConversation } from '../db/queries.js';
-import { cancelContract, confirmContract, createContract, createTaskContract, observe, observeTaskDeadline, reportTaskComplete, reportTaskProgress, reschedulePendingContract, setIntensity } from '../contracts/service.js';
+import { cancelContract, confirmContract, createContract, createTaskContract, deleteContract, observe, observeTaskDeadline, reportTaskComplete, reportTaskProgress, reschedulePendingContract, setIntensity } from '../contracts/service.js';
 import { taskSummary } from '../contracts/tasks.js';
 import { completion } from '../contracts/verifier.js';
 import { formatDeadline, parseDeadline } from '../utils/dates.js';
 import { parseGitHubUrl } from '../github/parse-url.js';
 import { GENERAL_HELP_REPLY } from './help.js';
 import { commandTaskReference, parseCommand } from './commands.js';
-import { activatedMessage, boardMessage, cancelledMessage, completionMessage, modeMessage, progressMessage, proposalMessage, publicRef, selectedMessage, statusMessage, taskActionUnavailableMessage } from './messages.js';
+import { activatedMessage, boardMessage, cancelledMessage, completionMessage, deletedMessage, modeMessage, progressMessage, proposalMessage, publicRef, selectedMessage, statusMessage, taskActionUnavailableMessage } from './messages.js';
 
 export class Orchestrator {
  constructor(private ai: Agent, private github: GitHubReader, private allowedRepos: readonly string[]) {}
@@ -24,10 +24,24 @@ export class Orchestrator {
   const command = parseCommand(text,existing,user.selected_contract_id);
   const intent = command ?? await this.ai.parse(text,{ now:now.toISOString(),timezone:user.timezone,intensity:user.intensity,selected_contract_id:user.selected_contract_id,contracts:existing,history });
   await recordConversation(db,user.id,'user',text);
-  const reply = async (message: string,contract?:Contract) => {
-   await queueMessage(db,{userId:user.id,spaceId,text:message,key:`inbound:${messageId}`,contractId:contract?.id});
+  const reply = async (message: string,contract?:Contract,referenced?:readonly Contract[]) => {
+   await queueMessage(db,{userId:user.id,spaceId,text:message,key:`inbound:${messageId}`,contractId:contract?.id,
+    referencedContractIds:referenced?.map(c=>c.id)});
   };
   if (intent.needs_clarification) { await reply(intent.clarification ?? 'Tell me the task and its exact deadline with AM/PM. A GitHub link is optional.'); return; }
+  if (intent.intent==='delete_contract') {
+   if (!command || command.intent!=='delete_contract' || !command.contract_id || command.contract_id!==intent.contract_id) {
+    await reply('Use DELETE followed by one task number, for example DELETE 4.');return;
+   }
+   const target=existing.find(c=>c.id===command.contract_id);
+   if (!target) {await reply('I couldn’t find that task. Send LIST to see your task numbers.');return;}
+   const deleted=await deleteContract(db,target,now);
+   if(user.selected_contract_id===target.id)user.selected_contract_id=null;
+   // An acknowledgement must survive the tombstone guard on task-bound replies.
+   await reply(deletedMessage(target,user,!deleted,now));return;
+  }
+  const explicitTarget=intent.contract_id?existing.find(c=>c.id===intent.contract_id):undefined;
+  if (explicitTarget?.deleted_at) {await reply(deletedMessage(explicitTarget,user,true,now));return;}
   if (intent.intent==='pause' || intent.intent==='resume') {
    const paused=intent.intent==='pause';
    await db.query('UPDATE users SET paused=$2,updated_at=now() WHERE id=$1',[user.id,paused]);
@@ -41,8 +55,8 @@ export class Orchestrator {
   if (intent.intent==='list_contracts') {
    const all=await contractsFor(db,user.id,true);
    const stats=(await db.query<{total:string;completed:string;missed:string}>(`SELECT count(*) FILTER(WHERE confirmed_at IS NOT NULL OR state='completed') AS total,
-    count(*) FILTER(WHERE state='completed') AS completed,count(*) FILTER(WHERE missed_at IS NOT NULL) AS missed FROM contracts WHERE user_id=$1`,[user.id])).rows[0]!;
-   await reply(boardMessage(all,user,stats)); return;
+    count(*) FILTER(WHERE state='completed') AS completed,count(*) FILTER(WHERE missed_at IS NOT NULL) AS missed FROM contracts WHERE user_id=$1 AND deleted_at IS NULL`,[user.id])).rows[0]!;
+   await reply(boardMessage(all,user,stats),undefined,all); return;
   }
   if (intent.intent==='select_contract') {
    const selected=existing.find(c=>c.id===intent.contract_id);
@@ -70,14 +84,14 @@ export class Orchestrator {
     try{deadlines=proposals.map(p=>parseDeadline(p.deadline_local,user.timezone,now));}
     catch{await reply(`Give each task a future, exact date and time in ${user.timezone}. I have not scheduled anything.`);return;}
     const plans=[...new Map(proposals.map((p,i)=>{const title=p.title.trim().slice(0,200);return [`${title.toLowerCase()}:${deadlines[i]!.toISOString()}`,{title,due:deadlines[i]!}];})).values()];
-    const matching=(title:string,due:Date)=>existing.find(c=>c.artifact_type==='task'&&c.state==='pending'&&c.title.trim().toLowerCase()===title.toLowerCase()&&c.due_at.getTime()===due.getTime());
+    const matching=(title:string,due:Date)=>existing.find(c=>!c.deleted_at&&c.artifact_type==='task'&&c.state==='pending'&&c.title.trim().toLowerCase()===title.toLowerCase()&&c.due_at.getTime()===due.getTime());
     const newCount=plans.filter(p=>!matching(p.title,p.due)).length;
-    if(existing.filter(c=>c.state==='active'||c.state==='pending').length+newCount>10){await reply('Your board has 10 pending or active tasks. Finish or cancel one before adding more.');return;}
+    if(existing.filter(c=>!c.deleted_at&&(c.state==='active'||c.state==='pending')).length+newCount>10){await reply('Your board has 10 pending or active tasks. Finish or cancel one before adding more.');return;}
     const created:Contract[]=[];
     for(const plan of plans)created.push(matching(plan.title,plan.due)??await createTaskContract(db,user,plan.title,plan.due,intent.intensity??user.intensity));
     user.selected_contract_id=created.length===1?created[0]!.id:null;
     await db.query('UPDATE users SET selected_contract_id=$2,updated_at=now() WHERE id=$1',[user.id,user.selected_contract_id]);
-    await reply(proposalMessage(created,user),created.length===1?created[0]:undefined);return;
+    await reply(proposalMessage(created,user),created.length===1?created[0]:undefined,created);return;
    }
    if(intent.milestones?.length){await reply('Use one deadline per GitHub target, or send ordinary tasks with separate deadlines.');return;}
    if (!intent.artifact_url || !intent.deadline_local || !intent.title) { await reply('Send the GitHub PR/issue URL and exact deadline, including AM/PM.');return; }
@@ -85,7 +99,7 @@ export class Orchestrator {
    const suppliedUrls=(source.match(/https?:\/\/[^\s<>]+/g)??[]).map(url=>url.replace(/[.,)\]}]+$/g,''));
    if (!suppliedUrls.includes(intent.artifact_url)) { await reply('Paste the exact GitHub PR or issue URL to authorize a contract.');return; }
    if (!this.allowedRepos.length) { await reply('GitHub verification is not configured. Ordinary tasks work without it; add a read-only token and exact repository allowlist to enable GitHub commitments.');return; }
-   if (existing.filter(c=>c.state==='active'||c.state==='pending').length>=10) { await reply('You have 10 pending or active contracts. Complete or cancel one before adding another.');return; }
+   if (existing.filter(c=>!c.deleted_at&&(c.state==='active'||c.state==='pending')).length>=10) { await reply('You have 10 pending or active contracts. Complete or cancel one before adding another.');return; }
    let ref; let due;
    try { ref=parseGitHubUrl(intent.artifact_url,this.allowedRepos); due=parseDeadline(intent.deadline_local,user.timezone,now); }
    catch { await reply('I need an allowed GitHub PR/issue URL and a future, unambiguous deadline in your stored timezone. Send YYYY-MM-DD HH:mm or a time with AM/PM.'); return; }
@@ -98,7 +112,7 @@ export class Orchestrator {
    await reply(proposalMessage([c],user),c); return;
   }
   if (intent.intent==='unknown') { await reply(GENERAL_HELP_REPLY);return; }
-  const unfinished=existing.filter(c=>['pending','active','missed'].includes(c.state));
+  const unfinished=existing.filter(c=>!c.deleted_at&&['pending','active','missed'].includes(c.state));
   const pending=unfinished.filter(c=>c.state==='pending');
   const candidates=intent.intent==='confirm_contract'&&pending.length?pending:unfinished;
   if(intent.intent==='confirm_contract'||intent.intent==='cancel_contract'){
@@ -114,6 +128,7 @@ export class Orchestrator {
    const action=intent.intent==='confirm_contract'?'CONFIRM':intent.intent==='cancel_contract'?'CANCEL':intent.intent==='report_progress'?'PROGRESS':intent.intent==='verify_completion'?'DONE':intent.intent==='request_rescue'?'RESCUE':'STATUS';
    await reply(candidates.length ? `Which task?\n${candidates.map(task=>`${publicRef(task)} · ${task.title.slice(0,70)}`).join('\n')}\n\nReply ${action} ${candidates[0]!.display_id}${action==='PROGRESS'?' 50%':''}.` : 'No unfinished tasks for that command. Send LIST to view your board.');return;
   }
+  if(c.deleted_at){await reply(deletedMessage(c,user,true,now));return;}
   if(c.state==='completed'||c.state==='cancelled'){
    const done=command?.intent==='verify_completion'&&/^DONE(?:\s|$)/i.test(text.trim());
    await reply(done&&c.state==='completed'&&c.artifact_type==='task'?completionMessage(c,user,true)

@@ -5,11 +5,11 @@ export async function getUser(db: PoolClient, id: string): Promise<User> {
  if (!row) throw new Error('User missing'); return row;
 }
 export async function contractsFor(db: PoolClient, userId: string, includeHistory=false): Promise<Contract[]> {
- return (await db.query<Contract>(`SELECT * FROM contracts WHERE user_id=$1 ${includeHistory ? '' : "AND state IN ('pending','active','missed')"}
+ return (await db.query<Contract>(`SELECT * FROM contracts WHERE user_id=$1 AND deleted_at IS NULL ${includeHistory ? '' : "AND state IN ('pending','active','missed')"}
  ORDER BY CASE WHEN state IN ('pending','active','missed') THEN 0 ELSE 1 END,
  CASE WHEN state IN ('pending','active','missed') THEN display_id END ASC, display_id DESC`,[userId])).rows;
 }
-/** Explicit commands must still reach finished tasks outside the current board. */
+/** Explicit commands can find finished or deleted tasks; callers must guard tombstones. */
 export async function contractByReference(db:PoolClient,userId:string,reference:string):Promise<Contract|undefined>{
  const normalized=reference.replace(/^#/,'').toLowerCase();
  if(/^[1-9]\d*$/.test(normalized)){
@@ -23,10 +23,11 @@ export async function contractByReference(db:PoolClient,userId:string,reference:
 export async function queueMessage(db: PoolClient, input: {
  userId: string; spaceId: string; text: string; key: string;
  contractId?: string; kind?: 'reply'|'reminder'|'verdict'|'victory'|'error'|'summary';
+ referencedContractIds?: string[];
 }): Promise<void> {
- await db.query(`INSERT INTO outbox(user_id,space_id,message_text,event_key,contract_id,kind,contract_version)
- VALUES($1,$2,$3,$4,$5,$6,(SELECT version FROM contracts WHERE id=$5)) ON CONFLICT(event_key) DO NOTHING`,
- [input.userId,input.spaceId,input.text,input.key,input.contractId ?? null,input.kind ?? 'reply']);
+ await db.query(`INSERT INTO outbox(user_id,space_id,message_text,event_key,contract_id,kind,contract_version,referenced_contract_ids)
+ VALUES($1,$2,$3,$4,$5,$6,(SELECT version FROM contracts WHERE id=$5),$7) ON CONFLICT(event_key) DO NOTHING`,
+ [input.userId,input.spaceId,input.text,input.key,input.contractId ?? null,input.kind ?? 'reply',input.referencedContractIds ?? null]);
 }
 export async function historyFor(db: PoolClient, userId: string): Promise<Array<{role:'user'|'assistant';content:string;created_at?:Date}>> {
  return (await db.query<{role:'user'|'assistant';content:string;created_at?:Date}>(`SELECT role,content,created_at FROM

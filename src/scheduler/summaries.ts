@@ -15,13 +15,13 @@ export async function ensureHourlySummary(db:PoolClient,userId:string,now=new Da
 
 export async function stopHourlySummaryIfEmpty(db:PoolClient,userId:string):Promise<void>{
  const cleared=await db.query(`UPDATE users SET hourly_summary_due_at=NULL WHERE id=$1
-  AND NOT EXISTS (SELECT 1 FROM contracts WHERE user_id=$1 AND state IN ('pending','active','missed')) RETURNING id`,[userId]);
+  AND NOT EXISTS (SELECT 1 FROM contracts WHERE user_id=$1 AND deleted_at IS NULL AND state IN ('pending','active','missed')) RETURNING id`,[userId]);
  if(cleared.rowCount)await suppressOlderSummaries(db,userId);
 }
 
 /** Summaries include every unfinished task, including explicitly labelled drafts. */
 export async function unfinishedForSummary(db:PoolClient,userId:string):Promise<Contract[]>{
- return (await db.query<Contract>(`SELECT * FROM contracts WHERE user_id=$1 AND state IN ('pending','active','missed')
+ return (await db.query<Contract>(`SELECT * FROM contracts WHERE user_id=$1 AND deleted_at IS NULL AND state IN ('pending','active','missed')
   ORDER BY due_at,display_id`,[userId])).rows;
 }
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PoolClient } from 'pg';
 import type { Agent, ArtifactRef, Contract, Evidence, GitHubContract, GitHubReader, TaskContract, Transport, User } from '../src/types.js';
-import { deliverOutbox, type OutboxRow } from '../src/scheduler/outbox.js';
+import { deliverOutbox, victory, type OutboxRow } from '../src/scheduler/outbox.js';
 
 const owner: User = {
   id: 'c823f849-ff6c-4e41-8181-01c5e065e190', imessage_handle: '+15551234567',
@@ -48,6 +48,7 @@ let ai: Agent;
 let transport: Transport;
 let currentOwner: User;
 let currentContract: Contract | undefined;
+let referencedContracts: Contract[];
 
 const hasSql = (fragment: string) => query.mock.calls.some(([sql]) => String(sql).includes(fragment));
 
@@ -56,9 +57,15 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-10-18T12:00:30Z'));
   currentOwner = { ...owner };
   currentContract = contract();
-  query = vi.fn(async (sql: string) => {
+  referencedContracts = [];
+  query = vi.fn(async (sql: string, parameters: unknown[] = []) => {
     if (sql.startsWith('SELECT * FROM users')) return { rows: [currentOwner], rowCount: 1 };
     if (sql.startsWith('SELECT * FROM contracts')) return { rows: currentContract ? [currentContract] : [], rowCount: currentContract ? 1 : 0 };
+    if (sql.startsWith('SELECT 1 FROM contracts')) {
+      const [userId, ids] = parameters as [string, string[]];
+      const removed = referencedContracts.some(c => c.user_id === userId && ids.includes(c.id) && c.deleted_at);
+      return { rows: removed ? [{ '?column?': 1 }] : [], rowCount: removed ? 1 : 0 };
+    }
     return { rows: [], rowCount: 1 };
   });
   db = { query } as unknown as PoolClient;
@@ -73,6 +80,68 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('durable outbox delivery guards', () => {
+  it('suppresses an unbound board or multi-task proposal if any referenced owner task was removed', async () => {
+    currentOwner.paused = true;
+    const alive = taskContract();
+    const removed = taskContract({ id: 'c823f849-ff6c-4e41-8181-01c5e065e192', deleted_at: new Date() });
+    referencedContracts = [alive, removed];
+    await deliverOutbox(db, row({ kind: 'reply', contract_id: null, contract_version: null, referenced_contract_ids: [alive.id, removed.id], message_text: 'Previously generated board.' }), github, ai, transport);
+    expect(hasSql("status='suppressed'")).toBe(true);
+    expect(hasSql('INSERT INTO conversation_messages')).toBe(false);
+    expect(inspect).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('still sends a snapshot when only an unrelated owner task was removed', async () => {
+    const alive = taskContract();
+    referencedContracts = [alive, taskContract({ id: 'c823f849-ff6c-4e41-8181-01c5e065e192', deleted_at: new Date() })];
+    await deliverOutbox(db, row({ kind: 'reply', contract_id: null, contract_version: null, referenced_contract_ids: [alive.id], message_text: 'Current board.' }), github, ai, transport);
+    expect(send).toHaveBeenCalledExactlyOnceWith(owner.space_id, 'Current board.');
+    expect(hasSql("status='suppressed'")).toBe(false);
+  });
+
+  it('does not let another owner’s deleted task suppress this owner’s snapshot', async () => {
+    const foreign = taskContract({ user_id: 'c823f849-ff6c-4e41-8181-01c5e065e193', deleted_at: new Date() });
+    referencedContracts = [foreign];
+    await deliverOutbox(db, row({ kind: 'reply', contract_id: null, contract_version: null, referenced_contract_ids: [foreign.id], message_text: 'Owner reply.' }), github, ai, transport);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('WHERE user_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NOT NULL'), [owner.id, [foreign.id]]);
+    expect(send).toHaveBeenCalledExactlyOnceWith(owner.space_id, 'Owner reply.');
+    expect(hasSql("status='suppressed'")).toBe(false);
+  });
+
+  it.each([undefined, null, []])('preserves unbound replies without reference metadata %j', async referencedIds => {
+    await deliverOutbox(db, row({ kind: 'reply', contract_id: null, contract_version: null, referenced_contract_ids: referencedIds, message_text: 'Task deleted.' }), github, ai, transport);
+    expect(hasSql('SELECT 1 FROM contracts')).toBe(false);
+    expect(send).toHaveBeenCalledExactlyOnceWith(owner.space_id, 'Task deleted.');
+  });
+
+  it.each(['reply', 'reminder', 'verdict', 'victory', 'error', 'summary'] as const)('suppresses deleted-contract %s snapshots before pause deferral or integrations', async kind => {
+    currentOwner.paused = true;
+    currentContract = contract({ state: kind === 'victory' ? 'completed' : 'active', deleted_at: new Date() });
+    await deliverOutbox(db, row({ kind }), github, ai, transport);
+    expect(hasSql("status='suppressed'")).toBe(true);
+    expect(hasSql("run_at=now()+interval '1 minute'")).toBe(false);
+    expect(inspect).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(responding).not.toHaveBeenCalled();
+  });
+
+  it('suppresses a deleted-task reply even when its queued contract version is null', async () => {
+    currentContract = taskContract({ deleted_at: new Date() });
+    await deliverOutbox(db, row({ kind: 'reply', contract_version: null }), github, ai, transport);
+    expect(hasSql("status='suppressed'")).toBe(true);
+    expect(send).not.toHaveBeenCalled();
+    expect(hasSql('INSERT INTO conversation_messages')).toBe(false);
+  });
+
+  it('does not generate or queue a victory for a deleted contract', async () => {
+    await victory(db, contract({ state: 'completed', deleted_at: new Date() }), evidence(), owner.space_id!, ai);
+    expect(generate).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('suppresses a contracted reply queued against a stale contract version', async () => {
     await deliverOutbox(db, row({ kind: 'reply', contract_version: 2 }), github, ai, transport);
     expect(hasSql("status='suppressed'")).toBe(true);

@@ -5,7 +5,7 @@ import { Orchestrator } from '../src/agent/orchestrator.js';
 import { cancelContract, confirmContract, createTaskContract, reportTaskComplete, reportTaskProgress } from '../src/contracts/service.js';
 import { migrate } from '../src/db/migrate.js';
 import { lockUser, transaction } from '../src/db/pool.js';
-import { getUser } from '../src/db/queries.js';
+import { getUser,queueMessage } from '../src/db/queries.js';
 import { deliverOutbox, type OutboxRow } from '../src/scheduler/outbox.js';
 import { queueDueSummary } from '../src/scheduler/summaries.js';
 import type { Agent, Contract, GitHubReader, TaskContract, Transport, User } from '../src/types.js';
@@ -94,6 +94,34 @@ describe.skipIf(!databaseUrl)('real PostgreSQL owner command journeys', () => {
       if (schemaCreated && /^dd_journey_[a-f0-9]{32}$/.test(schema)) await admin!.query(`DROP SCHEMA "${schema}" CASCADE`);
     } finally { await admin?.end(); }
   }, 30_000);
+
+  it('removes the exact task, sends its receipt, and keeps other work through repeat/delete/status/list commands',async()=>{
+    const user=await newUser();const now=new Date();
+    const remove=await task(user,'Remove this test task',new Date(now.getTime()+3*HOUR));
+    const keep=await task(user,'Keep this test task',new Date(now.getTime()+4*HOUR));
+    await ownerTransaction(user,async db=>{
+      await confirmContract(db,remove,now);await confirmContract(db,keep,now);
+      await reportTaskProgress(db,keep,27,now);
+      await db.query('UPDATE users SET selected_contract_id=$2 WHERE id=$1',[user.id,keep.id]);
+      await queueMessage(db,{userId:user.id,spaceId:user.space_id!,contractId:remove.id,key:'old-victory',kind:'victory',text:'Obsolete test message'});
+    });
+    const keepBefore=await load(keep.id);const keepJobs=await jobs(keep.id);
+    const receipt=await command(user,`DELETE ${remove.display_id}`);
+    expect(receipt.contract_id).toBeNull();expect(receipt.message_text).toContain(`#${remove.display_id}`);
+    expect((await load(remove.id)).deleted_at).toBeInstanceOf(Date);
+    expect(await load(keep.id)).toEqual(keepBefore);expect(await jobs(keep.id)).toEqual(keepJobs);
+    const send=vi.fn(async()=>{});
+    await transaction(pool!,db=>deliverOutbox(db,receipt,github,ai,{send,responding:async(_space,work)=>work(),stop:vi.fn()}));
+    expect(send).toHaveBeenCalledExactlyOnceWith(user.space_id,receipt.message_text);
+    expect((await pool!.query("SELECT status FROM outbox WHERE event_key='old-victory'")).rows[0].status).toBe('suppressed');
+    const board=await command(user,'LIST');expect(board.message_text).toContain(keep.title);expect(board.message_text).not.toContain(remove.title);
+    const repeated=await command(user,`DELETE ${remove.display_id}`);expect(repeated.message_text).toMatch(/already removed/i);
+    const status=await command(user,`STATUS ${remove.display_id}`);expect(status.message_text).toMatch(/already removed/i);
+    expect((await audit(remove.id)).filter(e=>e.event_type==='deleted')).toHaveLength(1);
+    await command(user,'DELETE');await command(user,'DELETE ALL');
+    expect(await load(keep.id)).toEqual(keepBefore);expect(await jobs(keep.id)).toEqual(keepJobs);
+    expect((await pool!.query('SELECT selected_contract_id FROM users WHERE id=$1',[user.id])).rows[0].selected_contract_id).toBe(keep.id);
+  });
 
   it('replays SELECT 1 → DONE 1 → DONE 1 → STATUS 1 → LIST without redirecting work or leaving a stale hourly task', async () => {
     const user = await newUser();

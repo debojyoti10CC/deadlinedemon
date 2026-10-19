@@ -5,7 +5,7 @@ import { Orchestrator } from '../src/agent/orchestrator.js';
 
 const mocks = vi.hoisted(() => ({
   contractByReference: vi.fn(), contractsFor: vi.fn(), historyFor: vi.fn(), queueMessage: vi.fn(), recordConversation: vi.fn(),
-  createContract: vi.fn(), createTaskContract: vi.fn(), confirmContract: vi.fn(), cancelContract: vi.fn(), observe: vi.fn(),
+  createContract: vi.fn(), createTaskContract: vi.fn(), confirmContract: vi.fn(), cancelContract: vi.fn(), deleteContract: vi.fn(), observe: vi.fn(),
   observeTaskDeadline: vi.fn(), reportTaskComplete: vi.fn(), reportTaskProgress: vi.fn(), setIntensity: vi.fn(), reschedulePendingContract: vi.fn(),
 }));
 vi.mock('../src/db/queries.js', () => ({
@@ -15,7 +15,7 @@ vi.mock('../src/db/queries.js', () => ({
 }));
 vi.mock('../src/contracts/service.js', () => ({
   createContract: mocks.createContract, createTaskContract: mocks.createTaskContract,
-  confirmContract: mocks.confirmContract, cancelContract: mocks.cancelContract, observe: mocks.observe,
+  confirmContract: mocks.confirmContract, cancelContract: mocks.cancelContract, deleteContract:mocks.deleteContract, observe: mocks.observe,
   observeTaskDeadline: mocks.observeTaskDeadline, reportTaskComplete: mocks.reportTaskComplete,
   reportTaskProgress: mocks.reportTaskProgress, setIntensity: mocks.setIntensity, reschedulePendingContract: mocks.reschedulePendingContract,
 }));
@@ -82,6 +82,7 @@ beforeEach(() => {
   });
   mocks.confirmContract.mockResolvedValue(undefined);
   mocks.cancelContract.mockResolvedValue(undefined);
+  mocks.deleteContract.mockImplementation(async (_db:unknown,c:Contract,now:Date)=>{if(c.deleted_at)return false;c.deleted_at=now;c.version+=1;return true;});
   mocks.observe.mockResolvedValue({ completed: false, newlyCompleted: false, missed: false });
   mocks.observeTaskDeadline.mockResolvedValue(undefined);
   mocks.reportTaskComplete.mockImplementation(async (_db: unknown,c: TaskContract,now: Date) => { c.state='completed';c.completed_at=now;c.progress_percent=100; });
@@ -96,6 +97,47 @@ beforeEach(() => {
   router = new Orchestrator({ parse, generate } as Agent, { inspect } as GitHubReader, ['owner/repo']);
 });
 afterEach(() => vi.useRealTimers());
+
+describe('explicit task removal',()=>{
+ it('deletes only the named task despite a different saved selection and queues an unbound receipt',async()=>{
+  const target=taskContract({state:'active'});const keep=taskContract({id:secondId,state:'active',progress_percent:27});
+  const keepBefore=structuredClone(keep);
+  mocks.contractsFor.mockResolvedValue([target,keep]);owner.selected_contract_id=keep.id;
+  await router.handle(db,owner,'DELETE 1',owner.space_id!,'delete-one');
+  expect(mocks.deleteContract).toHaveBeenCalledExactlyOnceWith(db,target,expect.any(Date));
+  expect(keep).toEqual(keepBefore);
+  expect(owner.selected_contract_id).toBe(keep.id);
+  expect(lastReply()).toContain('#1');
+  expect(mocks.queueMessage.mock.calls.at(-1)?.[1].contractId).toBeUndefined();
+  expect(parse).not.toHaveBeenCalled();expect(inspect).not.toHaveBeenCalled();expect(generate).not.toHaveBeenCalled();
+ });
+ it('reaches and removes completed history by exact reference',async()=>{
+  const completed=taskContract({state:'completed',progress_percent:100});
+  mocks.contractByReference.mockResolvedValue(completed);
+  await router.handle(db,owner,'DELETE 1',owner.space_id!,'delete-history');
+  expect(mocks.contractByReference).toHaveBeenCalledWith(db,owner.id,'1');
+  expect(mocks.deleteContract).toHaveBeenCalledExactlyOnceWith(db,completed,expect.any(Date));
+  expect(completed.state).toBe('completed');
+ });
+ it.each(['DONE','CONFIRM','PROGRESS 40%','CANCEL','RESCUE','STATUS'])('does not mutate a removed saved selection on %s',async text=>{
+  const removed=taskContract({state:'active',deleted_at:new Date()});owner.selected_contract_id=removed.id;
+  mocks.contractByReference.mockResolvedValue(removed);
+  await router.handle(db,owner,text,owner.space_id!,'removed-selection');
+  expect(lastReply()).toMatch(/already removed/i);
+  for(const method of [mocks.confirmContract,mocks.cancelContract,mocks.reportTaskComplete,mocks.reportTaskProgress,mocks.observeTaskDeadline,mocks.deleteContract])expect(method).not.toHaveBeenCalled();
+  expect(inspect).not.toHaveBeenCalled();expect(generate).not.toHaveBeenCalled();
+ });
+ it('does not authorize deletion from a forged model intent',async()=>{
+  mocks.contractsFor.mockResolvedValue([taskContract()]);parse.mockResolvedValue(intent('delete_contract',{contract_id:firstId}));
+  await router.handle(db,owner,'remove the first thing',owner.space_id!,'forged-delete');
+  expect(mocks.deleteContract).not.toHaveBeenCalled();expect(lastReply()).toContain('Use DELETE');
+ });
+ it.each(['DELETE','DELETE ALL','DELETE 1 2'])('never borrows a selected target for %s',async text=>{
+  owner.selected_contract_id=firstId;mocks.contractsFor.mockResolvedValue([taskContract()]);
+  await router.handle(db,owner,text,owner.space_id!,'ambiguous-delete');
+  expect(mocks.deleteContract).not.toHaveBeenCalled();expect(parse).not.toHaveBeenCalled();
+ });
+});
 
 describe('owner controls and contract selection', () => {
   it.each([['pause', 'PAUSE', true], ['resume', 'RESUME', false]] as const)('persists %s without GitHub or message-generation calls', async (name, text, paused) => {

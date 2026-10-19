@@ -10,6 +10,16 @@ Migration `002_general_tasks.sql` permits ordinary task commitments alongside co
 4. Run `npm run db:migrate` or start the new application. The migration runner holds an advisory lock and commits schema changes and their `schema_migrations` tracking rows in one transaction. A failure rolls back that transaction; a retry skips migrations already recorded as applied.
 5. Confirm all migration names appear in `schema_migrations`, compare the recorded IDs, states, and counts, and check `/readyz` after startup.
 
+## Per-task deletion: migration 006
+
+`006_task_deletion.sql` adds nullable `contracts.deleted_at` and `outbox.referenced_contract_ids` columns. Every existing value, state, numeric reference, event, job and message is preserved; existing rows receive null in the new columns. No task is deleted by migration or startup.
+
+Exact native DELETE commands mark the target with a deletion timestamp, increment its version once, and record one audit event. State, deadline, progress, evidence and completion facts remain available for recovery. Removed work is excluded from boards, statistics, hourly scheduling and mode changes. The selected target is cleared only if it is the removed task. All its unsent task-bound messages and structured board/proposal snapshots are suppressed; unrelated work remains unchanged. Both workers and delivery guard against tombstones before calling integrations. The removal acknowledgement is unbound so it can still be delivered.
+
+Run only the new runtime after cutover; stop every old worker before migration. Pre-deletion binaries ignore the new marker and can show or send removed tasks. A rollback must retain the deletion-aware read and delivery guards (the DELETE command itself may be disabled), or fix forward. Do not drop the marker, unset it indiscriminately, or restore an old database solely to roll back code. Whole-database restoration is a separately authorized recovery operation and can lose subsequent writes.
+
+Before enabling DELETE, inspect legacy unsent replies with `kind='reply' AND contract_id IS NULL`. Replies queued before migration have no structured task references and cannot be reliably classified from their text. Drain or review any such backlog before allowing deletion. New board/proposal replies record their task references, so deletion and delivery can suppress stale snapshots without parsing message content.
+
 Migration 003 assigns existing contracts numeric `display_id` values in `(created_at, due_at, id)` order. These references are unique across owners. A sequence supplies references for later inserts, including inserts from the previous runtime. Cancellation, selection, restarts, and migration retries do not renumber contracts. Gaps are expected after rolled-back inserts or deleted contracts; do not reset the sequence or reuse a reference.
 
 `progress_percent` is an integer from 0 through 100, defaulting to 0. Existing completed ordinary tasks receive 100; all other existing rows retain their state and start at 0. New task completion reports record 100 with the completion event. Intermediate progress is explicitly owner-reported and does not establish GitHub completion evidence.

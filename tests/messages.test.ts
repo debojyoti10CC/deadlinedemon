@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { activatedMessage, boardMessage, cancelledMessage, completionMessage, hourlySummaryMessage, modeMessage, progressMessage, proposalMessage, publicRef, scheduledProblemMessage, selectedMessage, statusMessage, taskActionUnavailableMessage } from '../src/agent/messages.js';
+import { activatedMessage, boardMessage, cancelledMessage, completionMessage, deletedMessage, hourlySummaryMessage, modeMessage, progressMessage, proposalMessage, publicRef, scheduledProblemMessage, selectedMessage, statusMessage, taskActionUnavailableMessage } from '../src/agent/messages.js';
 import { GENERAL_HELP_REPLY, WELCOME_REPLY } from '../src/agent/help.js';
+import { taskState } from '../src/agent/presentation.js';
 import { taskReminder, taskSummary } from '../src/contracts/tasks.js';
 import type { GitHubContract, Intensity, TaskContract, User } from '../src/types.js';
 
@@ -97,7 +98,7 @@ describe('message presentation contract',()=>{
    selectedMessage(c,owner),statusMessage(c,owner),activatedMessage(c,owner),progressMessage(c,owner),
    boardMessage([c,completed],owner),hourlySummaryMessage([c],owner),modeMessage(intensity),
    completionMessage(completed,owner),completionMessage(completed,owner,true),cancelledMessage(cancelled,owner),
-   taskActionUnavailableMessage(cancelled,owner,'DONE'),scheduledProblemMessage(3,true),scheduledProblemMessage(3,false)];
+   taskActionUnavailableMessage(cancelled,owner,'DONE'),deletedMessage({...c,deleted_at:new Date()},owner),scheduledProblemMessage(3,true),scheduledProblemMessage(3,false)];
   for(const reply of replies){
    expect(reply).not.toMatch(/\p{Extended_Pictographic}|\uFE0F/gu);
    expect(reply).not.toMatch(/court|plot development|season finale|roast|left the chat/iu);
@@ -159,6 +160,71 @@ describe('message presentation contract',()=>{
   }
   expect(scheduledProblemMessage(3,true)).toContain('Completion is still unverified');
   expect(scheduledProblemMessage(3,false)).not.toContain('GitHub');
+ });
+});
+
+describe('task-specific removal presentation',()=>{
+ it('acknowledges only the removed task, retains history, and never exposes a database identifier',()=>{
+  const removed=task({display_id:8,title:'Prepare the old checklist',deleted_at:new Date()});
+  const snapshot=structuredClone(removed);
+  for(const already of [false,true]){
+   const message=deletedMessage(removed,user,already);
+   expect(message).toContain(already?'#8 already removed':'#8 removed');
+   expect(message.match(/#8\b/g)).toHaveLength(1);
+   expect(message.match(/Prepare the old checklist/g)).toHaveLength(1);
+   expect(message).toContain('Task reminders stopped');
+   expect(message).toContain('saved history retained');
+   expect(message).toContain('LIST');
+   expect(message).not.toMatch(/permanently|CONFIRM|PROGRESS|DONE|SELECT|DELETE|#1\b/);
+   expect(message).not.toContain(removed.id);
+   expect(message.length).toBeLessThan(240);
+  }
+  expect(removed).toEqual(snapshot);
+ });
+
+ it('omits removed tasks from raw proposal, board, and hourly fixtures regardless of their saved state',()=>{
+  const visible=task({display_id:9,id:'visible-task',title:'Current visible task'});
+  const removed=(['pending','active','missed','completed','cancelled'] as const).map((state,index)=>task({
+   id:`removed-${index}`,display_id:index+1,state,title:`Removed private task ${index}`,deleted_at:new Date(),
+  }));
+  const rows=[...removed,visible];const snapshot=structuredClone(rows);
+  const owner={...user,selected_contract_id:removed[1]!.id};
+  for(const message of [proposalMessage(rows,owner),boardMessage(rows,owner),hourlySummaryMessage(rows,owner)]){
+   expect(message).toContain('Current visible task');
+   expect(message).not.toContain('Removed private task');
+   expect(message).not.toContain('[selected]');
+   expect(message).not.toMatch(/(?:CONFIRM|DONE|PROGRESS|STATUS|DELETE|SELECT) [1-5]\b/);
+  }
+  for(const message of [boardMessage(rows,owner),hourlySummaryMessage(rows,owner)])expect(message).toContain('1 unfinished');
+  expect(boardMessage(removed,owner)).toContain('No tasks yet');
+  expect(hourlySummaryMessage(removed,owner)).toContain('No unfinished tasks');
+  expect(proposalMessage(removed,owner)).toContain('Send a task');
+  expect(rows).toEqual(snapshot);
+ });
+
+ it('keeps direct views on an already removed target without offering an action or claiming a fresh update',()=>{
+  for(const artifact of [task(),github()]){
+   const removed={...artifact,display_id:8,deleted_at:new Date()};
+   const messages=[selectedMessage(removed,user),statusMessage(removed,user),activatedMessage(removed,user),
+    progressMessage(removed,user),completionMessage(removed,user),cancelledMessage(removed,user),
+    taskActionUnavailableMessage(removed,user,'CONFIRM')];
+   for(const message of messages){
+    expect(message).toContain('#8 already removed');
+    expect(message).not.toMatch(/Task activated|Progress recorded|Completion recorded|CONFIRM|PROGRESS|DONE|DELETE|RESCUE/);
+   }
+  }
+ });
+
+ it('gives deletion precedence over every prior state and offers exact-number controls only on saved tasks',()=>{
+  for(const state of ['pending','active','missed','completed','cancelled'] as const){
+   expect(taskState(task({state,deleted_at:new Date()}))).toBe('DELETED');
+  }
+  expect(GENERAL_HELP_REPLY).toContain('DELETE 1 — remove from board');
+  expect(proposalMessage([task({display_id:8,state:'pending'})],user)).toContain('DELETE 8');
+  for(const c of [task({display_id:8}),{...github(),display_id:8}]){
+   for(const message of [selectedMessage(c,user),statusMessage(c,user)])expect(message).toContain('DELETE 8');
+  }
+  expect(hourlySummaryMessage([task()],user)).not.toContain('DELETE');
  });
 });
 

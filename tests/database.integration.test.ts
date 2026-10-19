@@ -186,8 +186,8 @@ describe.skipIf(!databaseUrl)('real PostgreSQL durability and contract lifecycle
       expect(armed.getTime()).toBeGreaterThanOrEqual(before+HOUR);
       expect(armed.getTime()).toBeLessThanOrEqual(after+HOUR);
       expect(upgraded.filter(owner => owner.id !== unfinished.id).every(owner => owner.hourly_summary_due_at === null)).toBe(true);
-      expect((await legacy.query('SELECT * FROM contracts ORDER BY id')).rows).toEqual(contractsBefore);
-      expect((await legacy.query('SELECT * FROM outbox ORDER BY id')).rows).toEqual(outboxBefore);
+      expect((await legacy.query('SELECT * FROM contracts ORDER BY id')).rows).toEqual(contractsBefore.map(row=>({...row,deleted_at:null})));
+      expect((await legacy.query('SELECT * FROM outbox ORDER BY id')).rows).toEqual(outboxBefore.map(row=>({...row,referenced_contract_ids:null})));
       await migrate(legacy);
       expect((await legacy.query('SELECT hourly_summary_due_at FROM users WHERE id=$1', [unfinished.id])).rows[0]!.hourly_summary_due_at).toEqual(armed);
     } finally {
@@ -243,10 +243,10 @@ describe.skipIf(!databaseUrl)('real PostgreSQL durability and contract lifecycle
 
       await migrate(legacy);
 
-      expect((await legacy.query('SELECT * FROM contracts ORDER BY id')).rows).toEqual(contractsBefore);
+      expect((await legacy.query('SELECT * FROM contracts ORDER BY id')).rows).toEqual(contractsBefore.map(row=>({...row,deleted_at:null})));
       expect((await legacy.query('SELECT * FROM users ORDER BY id')).rows).toEqual(usersBefore);
       expect((await legacy.query('SELECT * FROM contract_events ORDER BY id')).rows).toEqual(eventsBefore);
-      expect((await legacy.query('SELECT * FROM outbox ORDER BY id')).rows).toEqual(outboxBefore);
+      expect((await legacy.query('SELECT * FROM outbox ORDER BY id')).rows).toEqual(outboxBefore.map(row=>({...row,referenced_contract_ids:null})));
       const jobs = (await legacy.query<{ id: string; contract_id: string; job_type: string; run_at: Date }>('SELECT * FROM scheduled_jobs ORDER BY id')).rows;
       expect(jobs.filter(job => jobsBefore.some(previous => previous.id === job.id))).toEqual(jobsBefore);
       const added = jobs.filter(job => !jobsBefore.some(previous => previous.id === job.id));

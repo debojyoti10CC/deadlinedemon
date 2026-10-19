@@ -6,6 +6,8 @@ Planning notes · 19 October 2026 · Asia/Kolkata
 
 Stable task numbers, saved task selection, self-reported HP meters, ordinary-task completion, optional GitHub evidence, three intensity choices, hourly combined summaries, and individual 2h/1h/30m/15m deadline alerts are implemented. `PAUSE` and `RESUME` control proactive messages. `MOVE` changes a pending draft's deadline. Completed and cancelled tasks leave hourly summaries and deadline alerts. Expired alert checkpoints are skipped after downtime.
 
+Explicit `DELETE <task number>` now removes one task from the board while preserving its record and audit history. It stops reminders and suppresses queued snapshots involving that task. Native tap buttons and an in-chat restore command remain future work.
+
 The proposals below are future work. Every example marked **proposed** describes a command to design and implement; it is not available today. Full phone acceptance and always-on operation remain separate readiness gates.
 
 ## Priorities

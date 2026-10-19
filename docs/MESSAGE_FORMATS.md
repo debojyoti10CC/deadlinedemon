@@ -1,6 +1,6 @@
 # Message experience
 
-Implemented 19 October 2026. Open [the interactive gallery](message-gallery.html) to compare 16 message types across MILD, SAVAGE, and NUCLEAR. Its sample tasks are fictional and rendered by the application's actual formatting functions; it sends nothing and changes no saved data. Rebuild it with `npm run docs:gallery`.
+Implemented 19 October 2026. Open [the interactive gallery](message-gallery.html) to compare 17 message types across MILD, SAVAGE, and NUCLEAR. Its sample tasks are fictional and rendered by the application's actual formatting functions; it sends nothing and changes no saved data. Rebuild it with `npm run docs:gallery`.
 
 Current presentation preference: professional plain text, restrained headings, explicit field labels, and no decorative emojis, jokes, or theatrical language. The existing mode commands remain compatible: MILD uses supportive guidance, SAVAGE uses direct accountability, and NUCLEAR uses firm deadline focus. HP meter glyphs remain functional indicators. User-authored task titles are preserved.
 
@@ -31,6 +31,7 @@ All views share title truncation, state, deadline, countdown, and meter helpers.
 | Completion | 100% reported HP, honest late label where applicable, mode-specific celebration |
 | Repeated completion | Existing completion acknowledgement; no second celebration or mutation |
 | Cancelled target | That task's state and an appropriate new-task suggestion |
+| Removed task | Exact number/title, stopped-reminder acknowledgement, saved-history note and LIST; a repeat says already removed |
 | Deadline alerts: 2h / 1h / 30m / 15m | A task-specific alert heading with actual time left, current HP/deadline, a professional nudge, and at most two action lines |
 | Integration problem | Public task number, honest temporary failure, automatic retry information |
 
@@ -38,7 +39,7 @@ Existing task numbers, commands, confirmation rules, state transitions, and stor
 
 ## Verification
 
-547 tests across 15 files passed with zero skips, including 66 real PostgreSQL tests. Type checking and the production build passed. The initial 13-card professional gallery was checked at a 390 × 844 viewport with zero horizontal overflow. The updated 16-card gallery was refreshed in the browser and verified to include actual 2h/1h/30m/15m alert headings with no horizontal overflow at the current desktop viewport. These checks cover the preview; native iPhone rendering remains a device check.
+611 tests across 16 files passed with zero skips, including 81 real PostgreSQL tests. Type checking and the production build passed. The initial 13-card professional gallery was checked at a 390 × 844 viewport with zero horizontal overflow. The updated 17-card gallery was refreshed in the browser and verified to include actual 2h/1h/30m/15m alert headings with no horizontal overflow at the current desktop viewport. These checks cover the preview; native iPhone rendering remains a device check.
 
 The running app was restarted. A before/after hash comparison confirmed every saved task field, selected target, mode, pause setting, and hourly schedule stayed unchanged. Readiness reports database, Photon, and worker healthy. No extra iMessage, OpenAI, or GitHub request was used to test these formats.
 

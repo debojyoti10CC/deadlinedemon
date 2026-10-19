@@ -25,6 +25,7 @@ export function hpLine(c: Contract, compact = false): string {
 
 /** One supplied clock keeps every label in a message on the same side of a deadline. */
 export function taskState(c: Contract, now: Date = new Date()): string {
+ if(c.deleted_at)return 'DELETED';
  if (c.state === 'pending') return c.due_at.getTime() <= now.getTime()
   ? 'DRAFT · deadline passed' : 'DRAFT · awaiting confirmation';
  if (c.state === 'missed' || c.state === 'active' && c.due_at.getTime() <= now.getTime()) {

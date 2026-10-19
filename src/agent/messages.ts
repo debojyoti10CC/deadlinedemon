@@ -5,7 +5,7 @@ import { deadlineText, displayTitle, hpLine, publicRef, remainingTime, taskState
 export { publicRef } from './presentation.js';
 
 function paragraphs(...parts:Array<string|undefined>):string { return parts.filter(Boolean).join('\n\n'); }
-function unfinished(c:Contract):boolean { return ['pending','active','missed'].includes(c.state); }
+function unfinished(c:Contract):boolean { return !c.deleted_at&&['pending','active','missed'].includes(c.state); }
 function paused(user:User):string { return user.paused?'Reminders paused · RESUME to restart.':''; }
 function githubTarget(c:Contract):string {
  return c.artifact_type==='task'?'':`GitHub ${c.artifact_type==='pull_request'?'PR':'issue'} ${c.repo_owner}/${c.repo_name}#${c.artifact_number}`;
@@ -20,17 +20,19 @@ function cachedObservation(c:Contract,user:User):string {
 }
 function card(c:Contract,user:User,now:Date,includeReference=true):string {
  if(c.artifact_type==='task')return taskCard(c,user.timezone,now,includeReference);
+ if(c.deleted_at)return [includeReference?`${publicRef(c)} · ${displayTitle(c,100)}`:displayTitle(c,100),taskState(c,now),'Task reminders stopped.'].join('\n');
  return [includeReference?`${publicRef(c)} · ${displayTitle(c,100)}`:displayTitle(c,100),
   taskState(c,now),`Due: ${deadlineText(c.due_at,user.timezone)} (${user.timezone})`,
   unfinished(c)?remainingTime(c.due_at,now):'',githubTarget(c),cachedObservation(c,user),c.artifact_url].filter(Boolean).join('\n');
 }
 function nextStep(c:Contract,now:Date):string {
- if(c.artifact_type==='task')return taskActions(c,now);
- if(!unfinished(c))return 'LIST to see your other tasks.';
+ if(c.deleted_at)return 'LIST to see your remaining tasks.';
+ if(c.artifact_type==='task')return unfinished(c)?taskActions(c,now):['LIST to see your other tasks.',taskActions(c,now)].filter(Boolean).join('\n');
+ if(!unfinished(c))return `LIST to see your other tasks.\nRemove from board: DELETE ${c.display_id}`;
  if(c.state==='pending')return c.due_at.getTime()<=now.getTime()
-  ? `New deadline: MOVE ${c.display_id} YYYY-MM-DD HH:mm\nThen CONFIRM ${c.display_id} to start checks.`
-  : `CONFIRM ${c.display_id} to start checks.`;
- return `STATUS ${c.display_id} · RESCUE ${c.display_id}`;
+  ? `New deadline: MOVE ${c.display_id} YYYY-MM-DD HH:mm\nThen CONFIRM ${c.display_id} to start checks · DELETE ${c.display_id} to remove`
+  : `CONFIRM ${c.display_id} to start checks.\nRemove from board: DELETE ${c.display_id}`;
+ return `STATUS ${c.display_id} · RESCUE ${c.display_id}\nRemove from board: DELETE ${c.display_id}`;
 }
 function compactCard(c:Contract,user:User,now:Date,selected=false):string {
  let state=taskState(c,now);
@@ -44,12 +46,13 @@ function hpMeaning(contracts:Contract[]):string {
 }
 
 export function proposalMessage(contracts:Contract[],user:User,now=new Date()):string {
+ contracts=contracts.filter(c=>!c.deleted_at);
  if(!contracts.length)return 'Send a task and an exact deadline to get started.';
  const shown=contracts.slice(0,5);
  const cards=shown.map(c=>[`${publicRef(c)} · ${displayTitle(c,62)}`,
   `Due: ${deadlineText(c.due_at,user.timezone)} · ${c.intensity.toUpperCase()}`,
   c.artifact_type==='task'?hpLine(c,true):githubTarget(c),
-  c.due_at.getTime()<=now.getTime()?`Deadline passed · STATUS ${c.display_id} for options`:`Reply CONFIRM ${c.display_id}`].join('\n'));
+  c.due_at.getTime()<=now.getTime()?`Deadline passed · STATUS ${c.display_id} for options`:`Reply CONFIRM ${c.display_id} · DELETE ${c.display_id} to remove`].join('\n'));
  const ordinary=shown.find(c=>c.artifact_type==='task');
  const guidance=ordinary?`Already finished? DONE ${ordinary.display_id}`:'';
  return paragraphs(`Saved as ${shown.length===1?'a draft':'drafts'}\nDeadlines in ${user.timezone}`,
@@ -57,22 +60,26 @@ export function proposalMessage(contracts:Contract[],user:User,now=new Date()):s
 }
 
 export function selectedMessage(c:Contract,user:User,now=new Date()):string {
- const guidance=unfinished(c)?nextStep(c,now):'LIST to see your other tasks.';
+ if(c.deleted_at)return deletedMessage(c,user,true,now);
+ const guidance=nextStep(c,now)||'LIST to see your other tasks.';
  return paragraphs(`Selected ${publicRef(c)}`,card(c,user,now,false),guidance,paused(user));
 }
 
 /** Viewing task details never changes numberless command selection. */
 export function statusMessage(c:Contract,user:User,now=new Date()):string {
+ if(c.deleted_at)return deletedMessage(c,user,true,now);
  return paragraphs('Task details',card(c,user,now),nextStep(c,now)||'LIST to see your other tasks.',paused(user));
 }
 
 export function activatedMessage(c:Contract,user:User,now=new Date()):string {
+ if(c.deleted_at)return deletedMessage(c,user,true,now);
  const active={...c,state:'active' as const};
  return paragraphs(`Task activated · ${c.intensity.toUpperCase()}`,card(active,user,now),
-  c.artifact_type==='task'?nextStep(active,now):`GitHub evidence checks scheduled.\nSTATUS ${c.display_id} · RESCUE ${c.display_id}`,paused(user));
+  c.artifact_type==='task'?nextStep(active,now):`GitHub evidence checks scheduled.\nSTATUS ${c.display_id} · RESCUE ${c.display_id} · DELETE ${c.display_id}`,paused(user));
 }
 
 export function boardMessage(contracts:Contract[],user:User,stats?:{total:string;completed:string;missed:string},now=new Date()):string {
+ contracts=contracts.filter(c=>!c.deleted_at);
  const heat=`Mode: ${user.intensity.toUpperCase()}`;
  const current=contracts.filter(unfinished);
  const history=contracts.filter(c=>!unfinished(c)).slice().sort((a,b)=>(b.completed_at??b.created_at).getTime()-(a.completed_at??a.created_at).getTime());
@@ -117,6 +124,7 @@ export function modeMessage(intensity:Intensity):string {
 }
 
 export function progressMessage(c:Contract,user:User,now=new Date()):string {
+ if(c.deleted_at)return deletedMessage(c,user,true,now);
  if(c.artifact_type!=='task')return paragraphs(`${publicRef(c)} uses GitHub evidence.`,
   `HP is only for self-reported tasks.\nSTATUS ${c.display_id} to check it.`);
  if(c.state==='completed')return completionMessage(c,user,false,now);
@@ -128,6 +136,7 @@ export function progressMessage(c:Contract,user:User,now=new Date()):string {
 }
 
 export function completionMessage(c:Contract,user:User,already=false,now=new Date()):string {
+ if(c.deleted_at)return deletedMessage(c,user,true,now);
  const voice={mild:'Thank you for the update.',savage:'Proceed to your next priority.',nuclear:'Review your remaining commitments.'}[c.intensity];
  return paragraphs(`${already?'Already completed':'Completion recorded'} · ${publicRef(c)}`,card(c,user,now,false),
   already?'LIST to see your remaining tasks.':`No more reminders for this task.\n${voice}`);
@@ -135,6 +144,7 @@ export function completionMessage(c:Contract,user:User,already=false,now=new Dat
 
 /** Explain that exact target's state without redirecting the requested action. */
 export function taskActionUnavailableMessage(c:Contract,user:User,action:string,now=new Date()):string {
+ if(c.deleted_at)return deletedMessage(c,user,true,now);
  if(c.state==='completed')return completionMessage(c,user,true,now);
  if(c.state==='cancelled')return paragraphs(`${publicRef(c)} is cancelled`,card(c,user,now,false),'Send a new task + deadline to track it again.');
  if(c.artifact_type!=='task'&&c.state==='pending')return paragraphs(`${publicRef(c)} is still a draft`,
@@ -148,7 +158,15 @@ export function taskActionUnavailableMessage(c:Contract,user:User,action:string,
 }
 
 export function cancelledMessage(c:Contract,user:User,now=new Date()):string {
+ if(c.deleted_at)return deletedMessage(c,user,true,now);
  return paragraphs(`Cancelled ${publicRef(c)}`,card({...c,state:'cancelled'},user,now,false),'Future reminders stopped.\nLIST to see your board.');
+}
+
+/** Removal hides the named task; its saved history remains available to the app. */
+export function deletedMessage(c:Contract,_user:User,already=false,_now=new Date()):string {
+ return paragraphs(`${publicRef(c)} ${already?'already removed':'removed'}\n${displayTitle(c,120)}`,
+  'Task reminders stopped.\nRemoved from your board; saved history retained.',
+  'LIST to see your remaining tasks.');
 }
 
 export function scheduledProblemMessage(number:number,github:boolean):string {

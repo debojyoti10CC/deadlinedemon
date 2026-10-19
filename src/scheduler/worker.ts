@@ -65,9 +65,9 @@ export class Worker {
  }
  private async processJob(db:PoolClient,job:Record<string,any>):Promise<void>{
   const c=(await db.query<Contract>('SELECT * FROM contracts WHERE id=$1 FOR UPDATE',[job.contract_id])).rows[0]!;
-  const user=await getUser(db,c.user_id); const now=new Date();
   const done=()=>db.query("UPDATE scheduled_jobs SET status='done',locked_until=NULL,last_error=NULL WHERE id=$1",[job.id]);
-  if(!['active','missed'].includes(c.state)){await done();return;}
+  if(!c||c.deleted_at||!['active','missed'].includes(c.state)){await done();return;}
+  const user=await getUser(db,c.user_id); const now=new Date();
   if(user.paused||!user.space_id){await db.query("UPDATE scheduled_jobs SET status='pending',locked_until=NULL,run_at=now()+interval '1 minute',attempts=0 WHERE id=$1",[job.id]);return;}
   if(!reminderRelevant(job.job_type,c.due_at,now)){await done();return;}
   if(c.artifact_type==='task'){
@@ -120,7 +120,7 @@ export class Worker {
    await db.query(`UPDATE ${table} SET status=$2,locked_until=NULL,run_at=$3,last_error=$4 WHERE id=$1 AND status='processing'`,[row.id,status,next,name]);
    if(attempts===1&&table==='inbound_messages')await queueMessage(db,{userId:String(row.user_id),spaceId:String(row.space_id),key:`error:${row.id}`,text:'That request didn’t finish.\nNo new action was confirmed. I’ll retry automatically.'});
    if(attempts===1&&table==='scheduled_jobs'){
-    const owner=(await db.query<{user_id:string;space_id:string|null;display_id:number;artifact_type:Contract['artifact_type']}>(`SELECT c.user_id,u.space_id,c.display_id,c.artifact_type FROM contracts c JOIN users u ON u.id=c.user_id WHERE c.id=$1`,[row.contract_id])).rows[0];
+    const owner=(await db.query<{user_id:string;space_id:string|null;display_id:number;artifact_type:Contract['artifact_type']}>(`SELECT c.user_id,u.space_id,c.display_id,c.artifact_type FROM contracts c JOIN users u ON u.id=c.user_id WHERE c.id=$1 AND c.deleted_at IS NULL`,[row.contract_id])).rows[0];
     if(owner?.space_id)await queueMessage(db,{userId:owner.user_id,spaceId:owner.space_id,contractId:String(row.contract_id),kind:'error',key:`error:${row.id}`,text:scheduledProblemMessage(owner.display_id,owner.artifact_type!=='task')});
    }
    if(failed&&table==='inbound_messages'){

@@ -106,14 +106,32 @@ describe('task snapshots and concise action footers', () => {
   const c = task({ state });
   const actions = taskActions(c, now);
   expect(actions.split('\n').length).toBeLessThanOrEqual(2);
+  expect(actions).toContain('DELETE 3');
   if (state === 'completed' || state === 'cancelled') {
-   expect(actions).toBe('');
+   expect(actions).toBe('Remove from board: DELETE 3');
    expect(taskCard(c, 'Asia/Kolkata', now)).not.toContain('left');
    expect(taskCard(c, 'Asia/Kolkata', now)).not.toContain('overdue');
   } else {
    expect(actions).toContain('DONE 3');
    expect(actions).toContain('PROGRESS 3 50');
   }
+ });
+
+ it.each(['active', 'pending', 'missed', 'completed', 'cancelled'] as const)('keeps deleted %s task views factual and free of controls', state => {
+  const c = task({ state, deleted_at: now });
+  expect(taskCard(c, 'Asia/Kolkata', now)).toBe('#3 · Finish the design\nDELETED\nReminders stopped.');
+  expect(taskCard(c, 'Asia/Kolkata', now, false)).toBe('Finish the design\nDELETED\nReminders stopped.');
+  expect(taskActions(c, now)).toBe('');
+  expect(taskSummary(c, 'Asia/Kolkata', now)).toBe(taskCard(c, 'Asia/Kolkata', now));
+  expect(taskReminder(c, 'Asia/Kolkata', now, false, 'before_15')).toBe(taskCard(c, 'Asia/Kolkata', now));
+  expect(taskReminder(c, 'Asia/Kolkata', now, true, 'followup')).not.toMatch(/HP|ACTIVE|CONFIRM|PROGRESS|DONE 3|RESCUE|DELETE 3|left|overdue/);
+  expect(c.state).toBe(state);
+ });
+
+ it('does not display GitHub evidence claims or interactive controls in a deleted direct alert view', () => {
+  const text = githubDeadlineAlert({ ...github(), deleted_at: now }, 'Asia/Kolkata', now, 'Old GitHub evidence');
+  expect(text).toBe('#3 · Finish the design\nDELETED\nReminders stopped.');
+  expect(text).not.toMatch(/Deadline alert|GitHub|STATUS|DONE|RESCUE|DELETE 3|left/);
  });
 
  it('uses the supplied clock for draft controls, countdown, and overdue state together', () => {

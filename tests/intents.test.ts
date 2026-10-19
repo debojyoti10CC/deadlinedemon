@@ -31,7 +31,7 @@ const complete = (value: unknown) => mocks.parse.mockResolvedValue({ status: 'co
 beforeEach(() => { mocks.parse.mockReset(); mocks.construct.mockReset(); });
 
 describe('owner-scoped task history references',()=>{
- it.each(['DONE 1','STATUS #1','SELECT 1','MOVE 1 2026-10-20 08:00','PROGRESS 1 40%','task 1','#1'])('extracts only the explicit task reference from %s',text=>{
+ it.each(['DONE 1','DELETE 1','STATUS #1','SELECT 1','MOVE 1 2026-10-20 08:00','PROGRESS 1 40%','task 1','#1'])('extracts only the explicit task reference from %s',text=>{
   expect(commandTaskReference(text)).toBe('1');
  });
  it.each(['1','DONE','PROGRESS 40%','DONE 0','SELECT -1','hi','CONFIRM next'])('does not borrow a reference from %s',text=>{
@@ -45,6 +45,26 @@ describe('owner-scoped task history references',()=>{
   const completed={...savedTask(1),state:'completed'} as Contract;
   const active=savedTask(9,secondId);
   expect(parseCommand('first task',[completed,active],completed.id)).toMatchObject({intent:'select_contract',contract_id:active.id});
+ });
+});
+
+describe('task-specific deletion commands',()=>{
+ it.each(['DELETE 3','delete #3',`DELETE ${id.toUpperCase()}`])('resolves exactly the task named by %s without a model request',async text=>{
+  const current=context();current.contracts=[savedTask(3),savedTask(4,secondId)];current.selected_contract_id=secondId;
+  expect(await new OpenAIAgent('test-key','test-model').parse(text,current)).toMatchObject({intent:'delete_contract',contract_id:id,needs_clarification:false});
+  expect(mocks.parse).not.toHaveBeenCalled();
+ });
+ it.each(['DELETE','DELETE ALL','DELETE 3 4','DELETE 0','DELETE -1','DELETE 999999999999999999999','DELETE first task'])('refuses ambiguous or malformed deletion %s without using the saved selection',async text=>{
+  const current=context();current.contracts=[savedTask(3)];current.selected_contract_id=id;
+  expect(await new OpenAIAgent('test-key','test-model').parse(text,current)).toMatchObject({intent:'unknown',needs_clarification:true,contract_id:null});
+  expect(mocks.parse).not.toHaveBeenCalled();
+ });
+ it('excludes deletion from model-authorized intents',()=>{
+  expect(IntentSchema.safeParse(extracted({intent:'delete_contract',contract_id:id})).success).toBe(false);
+ });
+ it('does not let a removed historical selection change ordinal positions',()=>{
+  const removed={...savedTask(1),deleted_at:new Date()};
+  expect(parseCommand('first task',[removed,savedTask(4,secondId)],removed.id)).toMatchObject({intent:'select_contract',contract_id:secondId});
  });
 });
 

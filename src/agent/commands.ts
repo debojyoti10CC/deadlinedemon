@@ -30,7 +30,7 @@ function referenceId(reference: string, contracts: readonly Contract[]): string 
 /** Extract only syntactically explicit references for owner-scoped history lookup. */
 export function commandTaskReference(text:string):string|null {
  const input=text.trim();
- const match=/^(?:CONFIRM|CANCEL|STATUS|DONE|RECHECK|RESCUE|SELECT|MOVE)\s+(\S+)(?:\s|$)/i.exec(input)
+ const match=/^(?:CONFIRM|CANCEL|DELETE|STATUS|DONE|RECHECK|RESCUE|SELECT|MOVE)\s+(\S+)(?:\s|$)/i.exec(input)
   ?? /^PROGRESS\s+(\S+)\s+\d+(?:\.\d+)?\s*%?$/i.exec(input)
   ?? /^(?:TASK\s+)(#?[1-9]\d*)$/i.exec(input)
   ?? /^(#[1-9]\d*)$/.exec(input);
@@ -50,6 +50,15 @@ export function parseCommand(text: string, contracts: readonly Contract[] = [], 
   if (/^MODE$/i.test(input)) return clarify(MODE_HELP);
   const mode = /^(?:MODE\s+)?(mild|savage|nuclear)$/i.exec(input);
   if (mode) return intent('change_intensity', { intensity: mode[1]!.toLowerCase() as Intensity });
+
+  // Removal always names one task explicitly; never borrow a saved selection.
+  const deletion = /^DELETE\s+(\S+)$/i.exec(input);
+  if (deletion) {
+    const contractId = referenceId(deletion[1]!, contracts);
+    return contractId ? intent('delete_contract', { contract_id: contractId })
+      : clarify('No matching task. Send LIST, then DELETE followed by that task’s number.');
+  }
+  if (/^DELETE\b/i.test(input)) return clarify('Delete one task with DELETE 4, using its number from LIST. Other tasks stay unchanged.');
 
   const move = /^MOVE\s+(\S+)\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)$/i.exec(input);
   if (move) {
@@ -93,8 +102,9 @@ export function parseCommand(text: string, contracts: readonly Contract[] = [], 
   }
   const ordinal = /^(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+task[.!?]*$/i.exec(input);
   if (ordinal) {
-    const current=contracts.filter(contract=>['pending','active','missed'].includes(contract.state));
-    const ordered = (current.length?current:contracts).filter(contract => Number.isSafeInteger(contract.display_id) && contract.display_id > 0)
+    const visible=contracts.filter(contract=>!contract.deleted_at);
+    const current=visible.filter(contract=>['pending','active','missed'].includes(contract.state));
+    const ordered = (current.length?current:visible).filter(contract => Number.isSafeInteger(contract.display_id) && contract.display_id > 0)
       .slice().sort((left, right) => left.display_id - right.display_id);
     const selected = ordered[ORDINALS.indexOf(ordinal[1]!.toLowerCase())];
     return selected ? intent('select_contract', { contract_id: selected.id }) : clarify('That task is not in your list. Send LIST to see your task numbers.');

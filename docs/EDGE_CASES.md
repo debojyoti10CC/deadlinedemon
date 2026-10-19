@@ -30,11 +30,15 @@ Verified 2026-10-19, Asia/Kolkata. This audit follows the real phone failure whe
 | Delay a two-hour alert until ninety minutes remain | Render 1h 30m from the delivery clock for ordinary and GitHub work; no extra model request. | Outbox regressions |
 | Complete/cancel or move a deadline while an alert is queued | Suppress terminal tasks and checkpoints outside their current window before paid reads. | Outbox and worker tests |
 | Plain-text inline reply from the exact owner | Process only its new text; ignore quoted targets. Groups, other senders and nontext replies remain rejected. | Authorization and transport tests |
+| DELETE names a different task from the selected one | Remove only the named task; preserve every field/job of the other task and its selection. | Real PostgreSQL service and command journey tests |
+| DELETE on a draft, active, overdue, completed or cancelled task | Preserve state, progress, deadline and audit facts; hide that exact record and stop future messages. | PostgreSQL tests across all states and GitHub evidence |
+| Repeated, bare, bulk, malformed or model-invented deletion | Exact repeat acknowledges the removed task once; other forms cannot borrow a selection or authorize deletion. | Parser, orchestrator and PostgreSQL regressions |
+| A deleted target has queued messages while paused, failed or being retried | Suppress task replies, alerts, verdicts, victories, errors and structured boards/proposals before integration calls; preserve unrelated replies. | Outbox and real worker/PostgreSQL tests |
 | Outgoing sends work while incoming messages stop | Show safe last-frame/accepted/rejected metadata separately; outbound success cannot erase an observed receive failure. Silence remains unverified, not evidence of recovery. | Transport tests; subsequent real task creation and LIST were accepted, persisted and answered on first attempts. Earlier missing-interval cause remains unproven; latest physical reply receipt still needs owner confirmation. |
 
 ## Validation
 
-547 tests across 15 files passed with zero skips, including 66 tests against a separate PostgreSQL test database. TypeScript checking and the production build passed. Test schemas were isolated and removed; test transports, OpenAI, and GitHub clients made no live service calls.
+611 tests across 16 files passed with zero skips, including 81 tests against a separate PostgreSQL test database. TypeScript checking and the production build passed. Test schemas were isolated and removed; test transports, OpenAI, and GitHub clients made no live service calls.
 
 The actual owner's previously processed `DONE 1` was recovered through the normal orchestrator after a verified database backup. Task #1 became completed at 100%, without confirmation. All fields of tasks #2 and #3 were compared before/after and remained unchanged; #3 remains active at 27%. One corrected completion reply was acknowledged by Photon at 2026-10-18 20:41:58 UTC on its first attempt. Readiness reports database, Photon, and worker healthy. Physical receipt of that corrected reply is not established by the send acknowledgement.
 

@@ -28,6 +28,7 @@ export interface ContractFields {
   display_id: number; progress_percent: number;
   intensity: Intensity; created_at: Date; confirmed_at: Date | null;
   completed_at: Date | null; last_checked_at: Date | null;
+  deleted_at?: Date | null;
   last_observed_state: Evidence | null; version: number; missed_at: Date | null;
 }
 export type GitHubContract = ContractFields & ArtifactRef;
@@ -47,7 +48,7 @@ export interface GitHubReader { inspect(ref: ArtifactRef, detailed?: boolean): P
 export interface Intent {
   intent: 'create_contract' | 'confirm_contract' | 'get_status' | 'request_rescue' |
     'verify_completion' | 'list_contracts' | 'change_intensity' | 'pause' | 'resume' |
-    'cancel_contract' | 'select_contract' | 'report_progress' | 'reschedule_contract' | 'unknown';
+    'cancel_contract' | 'delete_contract' | 'select_contract' | 'report_progress' | 'reschedule_contract' | 'unknown';
   title: string | null; artifact_url: string | null; deadline_local: string | null;
   timezone: string | null; intensity: Intensity | null; contract_id: string | null;
   needs_clarification: boolean; clarification: string | null;

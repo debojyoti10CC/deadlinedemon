@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// Activation and cancellation are deliberately absent: only application commands
+// Activation, cancellation and deletion are deliberately absent: only application commands
 // may authorize those state transitions, even if a model returns hostile output.
 export const IntentSchema = z.object({
   intent: z.enum([

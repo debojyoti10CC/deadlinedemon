@@ -1,5 +1,5 @@
 import {writeFile} from 'node:fs/promises';
-import {activatedMessage,boardMessage,cancelledMessage,completionMessage,hourlySummaryMessage,progressMessage,proposalMessage,scheduledProblemMessage,selectedMessage,statusMessage,taskActionUnavailableMessage} from '../dist/src/agent/messages.js';
+import {activatedMessage,boardMessage,cancelledMessage,completionMessage,deletedMessage,hourlySummaryMessage,progressMessage,proposalMessage,scheduledProblemMessage,selectedMessage,statusMessage,taskActionUnavailableMessage} from '../dist/src/agent/messages.js';
 import {WELCOME_REPLY} from '../dist/src/agent/help.js';
 import {taskReminder} from '../dist/src/contracts/tasks.js';
 
@@ -14,6 +14,7 @@ for(const mode of ['mild','savage','nuclear']){
  const draft={...active,id:'22222222-2222-4222-8222-222222222222',display_id:2,title:'Publish the homepage',progress_percent:0,state:'pending',confirmed_at:null,due_at:new Date('2026-10-19T04:30:00Z')};
  const completed={...active,id:'33333333-3333-4333-8333-333333333333',display_id:1,title:'Finish the design',state:'completed',progress_percent:100,due_at:new Date('2026-10-18T18:30:00Z'),completed_at:now,missed_at:new Date('2026-10-18T18:30:00Z')};
  const cancelled={...draft,display_id:5,state:'cancelled',title:'Draft the old announcement'};
+ const deleted={...draft,display_id:6,title:'Prepare the old launch checklist',deleted_at:now};
  const github={...active,id:'44444444-4444-4444-8444-444444444444',display_id:4,title:'Merge the launch changes',artifact_type:'pull_request',repo_owner:'example',repo_name:'launch',artifact_number:24,artifact_url:'https://github.com/example/launch/pull/24',last_checked_at:new Date('2026-10-18T20:45:00Z')};
  github.last_observed_state={artifact:github,title:github.title,observedAt:'2026-10-18T20:45:00Z',state:'open',mergedAt:null,closedAt:null,headSha:null,mergeable:null,draft:null,checks:[],reviews:[],files:[],limitations:[]};
  // Drop the circular sample reference before data serialization (messages use only strings).
@@ -29,6 +30,7 @@ for(const mode of ['mild','savage','nuclear']){
   ['Completion recorded','A late report stays honest; no more commands for this task.',completionMessage(completed,user,false,now)],
   ['Already completed','A repeat command changes nothing.',completionMessage(completed,user,true,now)],
   ['Cancelled task','State-specific help keeps the command on the named task.',taskActionUnavailableMessage(cancelled,user,'DONE',now)],
+  ['Task removed','Only the named task is hidden. Saved history is retained.',deletedMessage(deleted,user,false,now)],
   ['GitHub snapshot','An observation time distinguishes stored evidence from a new check.',statusMessage(github,user,now)],
   ...[120,60,30,15].map(minutes=>[
    `${minutes===120?'2-hour':minutes===60?'1-hour':`${minutes}-minute`} deadline alert`,
@@ -47,4 +49,4 @@ const html=`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="vie
 const payload=${data};const list=document.getElementById('examples');function render(mode){list.replaceChildren(...payload[mode].map((sample,index)=>{const article=document.createElement('article');article.className='example';const label=document.createElement('div');label.className='label';const name=document.createElement('span');name.textContent=sample.title;const n=document.createElement('span');n.className='number';n.textContent=String(index+1).padStart(2,'0');label.append(name,n);const note=document.createElement('p');note.className='note';note.textContent=sample.note;const message=document.createElement('pre');message.className='message';message.textContent=sample.text;article.append(label,note,message);return article;}));document.querySelectorAll('[data-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.mode===mode)));}document.querySelectorAll('[data-mode]').forEach(button=>button.addEventListener('click',()=>render(button.dataset.mode)));render('savage');
 </script></html>`;
 await writeFile(new URL('../docs/message-gallery.html',import.meta.url),html);
-console.log('Generated docs/message-gallery.html: 16 message types × 3 intensities; no integrations called.');
+console.log(`Generated docs/message-gallery.html: ${payload.savage.length} message types × 3 intensities; no integrations called.`);

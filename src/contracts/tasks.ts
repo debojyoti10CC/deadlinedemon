@@ -3,6 +3,7 @@ import { deadlineText, displayTitle, hpLine, publicRef, remainingTime, taskState
 
 /** A read-only snapshot, separate from the next action a reply chooses to offer. */
 export function taskCard(c: TaskContract, timezone: string, now: Date = new Date(), includeReference = true): string {
+ if(c.deleted_at)return `${includeReference ? `${publicRef(c)} · ` : ''}${displayTitle(c,120)}\nDELETED\nReminders stopped.`;
  const unfinished = c.state !== 'completed' && c.state !== 'cancelled';
  const progress=`${hpLine(c,true)}${c.state==='completed'?'':'\nProgress · self-reported'}`;
  return `${includeReference ? `${publicRef(c)} · ` : ''}${displayTitle(c, 120)}\n${taskState(c, now)}\n${progress}\nDue: ${deadlineText(c.due_at, timezone)} (${timezone})${unfinished ? `\nTime remaining: ${remainingTime(c.due_at, now)}` : ''}`;
@@ -10,12 +11,13 @@ export function taskCard(c: TaskContract, timezone: string, now: Date = new Date
 
 /** At most two useful control lines, always for the task actually displayed. */
 export function taskActions(c: TaskContract, now: Date = new Date()): string {
+ if(c.deleted_at)return '';
  const update = `PROGRESS ${c.display_id} 50 · DONE ${c.display_id}`;
- if (c.state === 'completed' || c.state === 'cancelled') return '';
+ if (c.state === 'completed' || c.state === 'cancelled') return `Remove from board: DELETE ${c.display_id}`;
  if (c.state === 'pending') return c.due_at.getTime() <= now.getTime()
-  ? `Already finished? DONE ${c.display_id} · Update: PROGRESS ${c.display_id} 50\nNew deadline: MOVE ${c.display_id} YYYY-MM-DD HH:mm`
-  : `CONFIRM ${c.display_id} to start reminders.\nUpdate: ${update}`;
- return `Update: ${update}\nStuck? RESCUE ${c.display_id}`;
+  ? `Already finished? DONE ${c.display_id} · Update: PROGRESS ${c.display_id} 50\nNew deadline: MOVE ${c.display_id} YYYY-MM-DD HH:mm · DELETE ${c.display_id}`
+  : `CONFIRM ${c.display_id} to start reminders · DELETE ${c.display_id}\nUpdate: ${update}`;
+ return `Update: ${update}\nRESCUE ${c.display_id} · DELETE ${c.display_id}`;
 }
 
 /** Kept as the complete detail-card API for scheduler and existing callers. */
@@ -26,11 +28,12 @@ export function taskSummary(c: TaskContract, timezone: string, now: Date = new D
 
 /** Checkpoint facts stay current without regenerating a potentially stale countdown. */
 export function githubDeadlineAlert(c: GitHubContract, timezone: string, now: Date, evidenceDescription: string): string {
+ if(c.deleted_at)return `${publicRef(c)} · ${displayTitle(c,120)}\nDELETED\nReminders stopped.`;
  return [
   `Deadline alert · ${remainingTime(c.due_at, now)}`,
   `${publicRef(c)} · ${displayTitle(c, 120)}\n${taskState(c, now)}\nDue: ${deadlineText(c.due_at, timezone)} (${timezone})`,
   `GitHub ${c.artifact_type === 'pull_request' ? 'PR' : 'issue'} ${c.repo_owner}/${c.repo_name}#${c.artifact_number}\n${evidenceDescription}\n${c.artifact_url}`,
-  `Check: STATUS ${c.display_id} · DONE ${c.display_id}\nStuck? RESCUE ${c.display_id}`,
+  `Check: STATUS ${c.display_id} · DONE ${c.display_id}\nRESCUE ${c.display_id} · DELETE ${c.display_id}`,
  ].join('\n\n');
 }
 
@@ -45,7 +48,7 @@ function variant(c: TaskContract, now: Date, followup: boolean): number {
 /** Ordinary reminders are deterministic: no GitHub reads or generation calls. */
 export function taskReminder(c: TaskContract, timezone: string, now: Date, followup = false, milestone?: string): string {
  // Terminal states are normally suppressed by the scheduler; direct calls stay factual.
- if (c.state === 'completed' || c.state === 'cancelled') return taskCard(c, timezone, now);
+ if (c.deleted_at || c.state === 'completed' || c.state === 'cancelled') return taskCard(c, timezone, now);
  const overdue = now.getTime() >= c.due_at.getTime();
  const index = variant(c, now, followup);
  const voice = overdue ? {

@@ -37,6 +37,29 @@ export async function cancelContract(db: PoolClient,c: Contract): Promise<void> 
  await stopJobs(db,c.id); await event(db,c,'cancelled',{});
  c.state='cancelled';c.version+=1;
 }
+/** Remove one owner's task from the board while retaining its facts and audit trail. */
+export async function deleteContract(db:PoolClient,c:Contract,now=new Date()):Promise<boolean>{
+ if(!Number.isFinite(now.getTime()))throw new Error('Task deletion needs a valid time');
+ const deleted=(await db.query<Contract>(`UPDATE contracts SET deleted_at=$3,version=version+1
+  WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL RETURNING *`,[c.id,c.user_id,now])).rows[0];
+ if(!deleted){
+  const previous=(await db.query<Contract>('SELECT * FROM contracts WHERE id=$1 AND user_id=$2',[c.id,c.user_id])).rows[0];
+  if(!previous)throw new Error('Task not found for this owner');
+  c.deleted_at=previous.deleted_at;c.version=previous.version;
+  return false;
+ }
+ await db.query(`UPDATE users SET selected_contract_id=NULL,updated_at=now()
+  WHERE id=$1 AND selected_contract_id=$2`,[c.user_id,c.id]);
+ await db.query(`UPDATE scheduled_jobs SET status='done',locked_until=NULL
+  WHERE contract_id=$1 AND status IN ('pending','processing','failed')`,[c.id]);
+ await db.query(`UPDATE outbox SET status='suppressed',locked_until=NULL
+  WHERE user_id=$2 AND (contract_id=$1 OR $1=ANY(referenced_contract_ids))
+  AND status IN ('pending','processing','failed')`,[c.id,c.user_id]);
+ await event(db,deleted,'deleted',{source:'owner_command',deletedAt:now.toISOString()});
+ await stopHourlySummaryIfEmpty(db,c.user_id);
+ c.deleted_at=deleted.deleted_at;c.version=deleted.version;
+ return true;
+}
 export async function reschedulePendingContract(db:PoolClient,c:Contract,due:Date,now=new Date()):Promise<void>{
  if(c.state!=='pending')throw new Error('Only a pending task deadline can be moved');
  if(!Number.isFinite(due.getTime())||due.getTime()<=now.getTime())throw new Error('The new deadline must be in the future');
@@ -92,7 +115,7 @@ export async function setIntensity(db:PoolClient,user:User,intensity:Intensity):
  if(!['mild','savage','nuclear'].includes(intensity))throw new Error('Invalid intensity');
  await db.query('UPDATE users SET intensity=$2,updated_at=now() WHERE id=$1',[user.id,intensity]);
  const changed=(await db.query<Contract&{previous_intensity:Intensity}>(`WITH previous AS (
- SELECT id,intensity FROM contracts WHERE user_id=$1 AND state IN ('pending','active','missed') AND intensity<>$2 FOR UPDATE
+ SELECT id,intensity FROM contracts WHERE user_id=$1 AND deleted_at IS NULL AND state IN ('pending','active','missed') AND intensity<>$2 FOR UPDATE
  ) UPDATE contracts AS c SET intensity=$2,version=c.version+1 FROM previous WHERE c.id=previous.id
  RETURNING c.*,previous.intensity AS previous_intensity`,[user.id,intensity])).rows;
  for(const c of changed)await event(db,c,'intensity_changed',{from:c.previous_intensity,to:intensity});
