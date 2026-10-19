@@ -30,7 +30,7 @@ Verified 2026-10-19, Asia/Kolkata. This audit follows the real phone failure whe
 | Delay a two-hour alert until ninety minutes remain | Render 1h 30m from the delivery clock for ordinary and GitHub work; no extra model request. | Outbox regressions |
 | Complete/cancel or move a deadline while an alert is queued | Suppress terminal tasks and checkpoints outside their current window before paid reads. | Outbox and worker tests |
 | Plain-text inline reply from the exact owner | Process only its new text; ignore quoted targets. Groups, other senders and nontext replies remain rejected. | Authorization and transport tests |
-| Outgoing sends work while incoming messages stop | Show safe last-frame/accepted/rejected metadata separately; outbound success cannot erase an observed receive failure. Silence remains unverified, not evidence of recovery. | Transport tests; live reception investigation remains open |
+| Outgoing sends work while incoming messages stop | Show safe last-frame/accepted/rejected metadata separately; outbound success cannot erase an observed receive failure. Silence remains unverified, not evidence of recovery. | Transport tests; subsequent real task creation and LIST were accepted, persisted and answered on first attempts. Earlier missing-interval cause remains unproven; latest physical reply receipt still needs owner confirmation. |
 
 ## Validation
 
