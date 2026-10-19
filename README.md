@@ -53,7 +53,7 @@ Common single-task forms such as “Finish the video by tomorrow 9 AM” and “
 | `RECHECK 1` | Refresh GitHub evidence for a linked PR or issue |
 | `RESCUE 1` or “Why am I stuck?” | Request recovery advice; linked targets include GitHub evidence |
 | `MOVE 1 YYYY-MM-DD HH:mm` | Change a pending draft to a future local deadline; confirmation is still required |
-| `LIST` | Show task cards, HP, and recorded performance |
+| `TASKS` / `LIST` | Show all visible task cards, HP, and recorded performance |
 | `MILD`, `SAVAGE`, `NUCLEAR` or `MODE <name>` | Change the voice for current and future tasks |
 | `MODE` | Preview the three intensity choices |
 | `PAUSE` / `RESUME` | Pause/resume proactive monitoring and messages |

@@ -46,7 +46,7 @@ export function parseCommand(text: string, contracts: readonly Contract[] = [], 
   if (/^(?:help|what can you do)[!.?]*$/i.test(input)) return clarify(GENERAL_HELP_REPLY);
   if (/^PAUSE$/i.test(input)) return intent('pause');
   if (/^RESUME$/i.test(input)) return intent('resume');
-  if (/^LIST$/i.test(input)) return intent('list_contracts');
+  if (/^(?:LIST|TASKS)$/i.test(input)) return intent('list_contracts');
   if (/^MODE$/i.test(input)) return clarify(MODE_HELP);
   const mode = /^(?:MODE\s+)?(mild|savage|nuclear)$/i.exec(input);
   if (mode) return intent('change_intensity', { intensity: mode[1]!.toLowerCase() as Intensity });

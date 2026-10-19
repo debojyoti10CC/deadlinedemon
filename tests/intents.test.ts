@@ -102,7 +102,7 @@ describe('deterministic controls', () => {
   });
 
   it.each([
-    ['PAUSE', 'pause'], [' resume ', 'resume'], ['LIST', 'list_contracts'],
+    ['PAUSE', 'pause'], [' resume ', 'resume'], ['LIST', 'list_contracts'], ['TASKS', 'list_contracts'], ['tasks', 'list_contracts'],
     ['STATUS', 'get_status'], ['DONE', 'verify_completion'], ['RECHECK', 'verify_completion'],
     ['CONFIRM', 'confirm_contract'], ['CANCEL', 'cancel_contract'],
   ])('maps %s without an API call', async (message, intent) => {
